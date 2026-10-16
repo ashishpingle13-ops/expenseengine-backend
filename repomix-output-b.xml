@@ -1,0 +1,1069 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+middleware/
+  authMiddleware.js
+src/
+  controllers/
+    attendanceController.js
+    ledgerController.js
+    reportsController.js
+    userController.js
+    workerController.js
+  models/
+    Attendance.js
+    LedgerEntry.js
+    User.js
+    Worker.js
+  routes/
+    attendanceRoutes.js
+    ledgerRoutes.js
+    reportRoutes.js
+    userRoutes.js
+    workerRoutes.js
+.gitignore
+package.json
+server.js
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="middleware/authMiddleware.js">
+import { initializeApp, getApps, cert } from 'firebase-admin/app';
+import { getAuth } from 'firebase-admin/auth';
+import fs from 'fs';
+
+// 1. Load the secure JSON key (using your exact filename)
+const serviceAccount = process.env.FIREBASE_SERVICE_ACCOUNT
+    ? JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)
+    : JSON.parse(fs.readFileSync(new URL('../firebaseServiceAccount.json', import.meta.url)));
+
+// 2. Initialize Firebase Admin safely (The Modern Way)
+if (!getApps().length) {
+    initializeApp({
+        credential: cert(serviceAccount)
+    });
+}
+
+// 3. The Security Guard Function
+export const protect = async (req, res, next) => {
+    let token;
+
+    // Check if the frontend sent a Bearer token in the headers
+    if (req.headers.authorization && req.headers.authorization.startsWith("Bearer ")) {
+        try {
+            // Split the string "Bearer <token>" to grab just the token
+            token = req.headers.authorization.split(" ")[1];
+
+            // Verify the token using the new Modular Auth API
+            const decodedToken = await getAuth().verifyIdToken(token);
+
+            // Attach the user's details to the request so the controllers can use it
+            req.user = {
+                firebaseUid: decodedToken.uid,
+                email: decodedToken.email || "",
+                phone: decodedToken.phone_number || ""
+            };
+
+           return next(); // Token is valid, let them through!
+        } catch (error) {
+            console.error("Not authorized, token failed:", error);
+           return res.status(401).json({ message: "Not authorized, token failed" });
+        }
+    }
+
+    if (!token) {
+        return res.status(401).json({ message: "Not authorized, no token" });
+    }
+};
+</file>
+
+<file path="src/controllers/attendanceController.js">
+import Attendance from "../models/Attendance.js";
+
+
+// STEP 1: Fetch attendance for a specific date
+export async function getAttendanceByDate(req, res) {
+    try {
+    const  { id: date }  = req.params;
+    const record = await Attendance.findOne({ 
+        date,
+        firebaseUid: req.user.firebaseUid
+     });
+    // If no record exists for this date yet, just return an empty statuses object
+    if(!record){
+        return res.status(200).json({ date, statuses: {} });
+    }
+    res.status(200).json(record);
+    } catch (error) {
+        console.error("Error fetching attendance:", error);
+        res.status(500).json({ message: "Server Error"});
+    }
+}
+
+// STEP 2: Save or Update (Upsert) attendance for a specific date
+export async function saveAttendance(req,res) {
+    try {
+        const { date, statuses } = req.body;
+
+        if(!date || !statuses){
+            return res.status(400).json({ message: "Date and statuses are required."});
+        }
+        // 💡 THE MAGIC: findOneAndUpdate with { upsert: true }
+        // It looks for the date. If found, it updates it. If NOT found, it creates a new one!
+        const updatedRecord = await Attendance.findOneAndUpdate(
+            { firebaseUid: req.user.firebaseUid , date },
+            { statuses: statuses },
+            { new: true, upsert: true }
+        );
+        res.status(200).json({
+            message: "Attandance saved successfully!",
+            data: updatedRecord
+        });
+    } catch (error) {
+        console.error("Error saving attendance:", error);
+        res.status(500).json({ message: "Server Error" });
+    }
+}
+</file>
+
+<file path="src/controllers/ledgerController.js">
+import Worker from "../models/Worker.js";
+import LedgerEntry from "../models/LedgerEntry.js";
+
+
+// STEP 1 == Create a new Ledger Entry (Advance, Expense, or BossDeposit)
+export async function createLedgerEntry(req,res) {
+    try {
+        const { date, entryType, workerId, amount, paymentMethod ,description, category, screenshotUrl } = req.body;
+
+        // 1. Validation: Make sure they provided the required entryType
+        if(!entryType){
+            return res.status(400).json({ message: "Entry type is required"});
+        }
+
+        if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) {
+            return res.status(400).json({ message: "Valid positive amount is required" });
+        }
+
+        // 2. If this is an Advance, verify the worker exists first
+      let worker = null;
+      if (entryType === "Advance") {
+          if (!workerId) {
+              return res.status(400).json({ message: "Worker ID is required for an advance" });
+          }
+
+          worker = await Worker.findOne({
+              _id: workerId,
+              firebaseUid: req.user.firebaseUid
+          });
+          if (!worker) {
+              return res.status(404).json({ message: "Worker not found" });
+          }
+          if (worker.isActive === false) {
+            return res.status(400).json({ message: "Cannot log advance for an inactive worker" });
+            }
+      }
+
+      // 3. Create and save the actual Ledger Entry FIRST (so validation runs before balance changes)
+      const newEntry = new LedgerEntry({
+          firebaseUid: req.user.firebaseUid,
+          date,
+          entryType,
+          workerId: workerId || null,
+          amount: Number(amount),
+          paymentMethod: paymentMethod || "Cash",
+          description,
+          category: category || "Other",
+          screenshotUrl
+      });
+
+      const savedEntry = await newEntry.save();
+
+      // 4. Now safely increment the worker's balance
+      if (worker) {
+          worker.currentAdvanceBalance = (worker.currentAdvanceBalance || 0) + Number(amount);
+          await worker.save({ validateBeforeSave: false });
+      }
+
+      return res.status(201).json(savedEntry);
+
+    } catch (error) {
+        console.log("Error creating ledger entry:", error);
+    res.status(500).json({ message: "Server Error" });
+    }
+}
+
+
+// STEP 2 == Get all Ledger Entries
+export async function getAllLedgerEntries(req,res) {
+    try {
+        // .populate() fetches the actual worker data instead of just showing the ID string!
+       const entries = await LedgerEntry.find({ firebaseUid: req.user.firebaseUid }).populate("workerId", "name phoneNumber").sort({ date: -1 });
+        res.status(200).json(entries);
+    } catch (error) {
+        console.log("Error fetching ledger entries:", error);
+    res.status(500).json({ message: "Server Error" });
+    }
+}
+
+
+// STEP 3 == Get a single Ledger Entry by ID
+export async function getLedgerEntryById(req,res) {
+    try {
+        const { id } = req.params;
+        const entry = await LedgerEntry.findOne({
+            _id: id,
+            firebaseUid: req.user.firebaseUid
+        }).populate("workerId", "name");
+
+        if(!entry){
+            return res.status(404).json({ message: "Ledger entry not found"});
+        }
+        res.status(200).json(entry);
+    } catch (error) {
+        console.log("Error fetching single ledger entry:", error);
+    res.status(500).json({ message: "Server Error" });
+    }
+}
+
+// STEP 4 == Update a Ledger Entry
+export async function updateLedgerEntry(req,res) {
+    try {
+        const { id } = req.params;
+        const { amount, date, paymentMethod, description, category, isEdited, editReason } = req.body;
+
+        if (amount !== undefined && (isNaN(Number(amount)) || Number(amount) <= 0)) {
+            return res.status(400).json({ message: "Valid positive amount is required" });
+        }
+
+        const oldEntry = await LedgerEntry.findOne({ 
+            _id: id,
+            firebaseUid: req.user.firebaseUid
+        });
+
+        if (!oldEntry) {
+            return res.status(404).json({ message: "Ledger entry not found"});
+        }
+
+        if (oldEntry.entryType === "Advance") {
+            const worker = await Worker.findOne({ _id: oldEntry.workerId, firebaseUid: req.user.firebaseUid });
+            if (worker && worker.isActive === false) {
+                return res.status(400).json({ message: "Cannot edit advance for an inactive worker" });
+            }
+            if (amount !== undefined && Number(amount) !== oldEntry.amount) {
+                const difference = Number(amount) - oldEntry.amount; 
+                await Worker.updateOne(
+                    { _id: oldEntry.workerId, firebaseUid: req.user.firebaseUid },
+                    { $inc: { currentAdvanceBalance: difference } }
+                );
+            }
+        }
+         
+        const allowedUpdates = {};
+        if (amount !== undefined) allowedUpdates.amount = Number(amount);
+        if (date !== undefined) allowedUpdates.date = date;
+        if (paymentMethod !== undefined) allowedUpdates.paymentMethod = paymentMethod;
+        if (description !== undefined) allowedUpdates.description = description;
+        if (category !== undefined) allowedUpdates.category = category;
+        if (isEdited !== undefined) allowedUpdates.isEdited = Boolean(isEdited);
+        if (editReason !== undefined) allowedUpdates.editReason = editReason;
+
+        const updatedEntry = await LedgerEntry.findOneAndUpdate(
+            { _id: id, firebaseUid: req.user.firebaseUid }, 
+            allowedUpdates, 
+            { new: true, runValidators: true }
+        );
+
+        res.status(200).json(updatedEntry);
+    }
+    catch (error) {
+       console.log("Error updating ledger entry:", error);
+       if (error.name === "ValidationError" || error.name === "CastError") {
+           return res.status(400).json({ message: error.message });
+       }
+       res.status(500).json({ message: "Server Error" }); 
+    }
+}
+
+
+// STEP 5 == Delete a Ledger Entry
+export async function deleteLedgerEntry(req,res) {
+    try {
+        const { id } = req.params;
+        const deletedEntry = await LedgerEntry.findOneAndDelete({
+            _id: id,
+            firebaseUid: req.user.firebaseUid
+        });
+
+        if(!deletedEntry){
+            return res.status(404).json({ message: "Ledger entry not found "});
+        }
+
+        if (deletedEntry.entryType === "Advance" && deletedEntry.workerId) {
+            await Worker.updateOne(
+                { _id: deletedEntry.workerId, firebaseUid: req.user.firebaseUid },
+                { $inc: { currentAdvanceBalance: -Number(deletedEntry.amount) } }
+            );
+        }
+
+        res.status(200).json({ message: "Ledger Entry Deleted Successfully!" });
+    } catch (error) {
+        console.log("Error deleting ledger entry:", error);
+    res.status(500).json({ message: "Server Error" });
+    }
+
+}
+
+
+// STEP 6 == Get Monthly Ledger Summary (Boss Deposits & Worker Advances)
+export async function getMonthlyLedgerSummary(req, res) {
+    try {
+        const { month , year } = req.query;
+        const firebaseUid = req.user.firebaseUid;
+
+        // 1. Create a Date Range for the whole month
+        const startDate = new Date(year, month - 1, 1);
+        const endDate = new Date(year, month, 0, 23,59,59);
+
+        // 2. GET THE FULL LIST of Boss Deposits for this month (Newest first)
+        const bossDepositsList = await LedgerEntry.find({
+            firebaseUid,
+            entryType: "BossDeposit",
+            date: { $gte: startDate, $lte: endDate }
+        }).sort({ date: -1 });
+
+        // Calculate the total money received from that list
+        const totalBossDeposit = bossDepositsList.reduce((sum, entry) => sum + entry.amount, 0);
+
+        // 3. Get Worker Advances, grouped by each worker
+        const workerAdvances = await LedgerEntry.aggregate([
+            { $match: { firebaseUid, entryType: "Advance", date: { $gte: startDate, $lte: endDate } } },
+            { $group: { _id: "$workerId", totalAdvance: { $sum: "$amount" }, lastTransactionDate: { $max: "$date"} // Grabs the most recent transaction date!
+            }},
+
+            // This grabs the Worker's name from the Worker collection
+            { $lookup: { from: "workers", localField: "_id", foreignField: "_id", as: "workerInfo" } },
+            { $unwind: "$workerInfo" },
+
+            { $project: { _id: 1, totalAdvance: 1, name: "$workerInfo.name", lastTransactionDate: 1}}
+        ]);
+
+        // 4. Calculate the total of all advances combined
+        const totalAdvancesGiven = workerAdvances.reduce((sum, worker) => sum + worker.totalAdvance, 0);
+
+
+        // Send it all to the frontend
+        res.status(200).json({
+            totalBossDeposit,
+            totalAdvancesGiven,
+            workerAdvances,
+            bossDepositsList
+        });
+    } catch (error) {
+        console.error("Error fetching ledger summary:", error);
+        res.status(500).json({ message: "Server error fetching ledger data" });
+    }
+}
+
+// STEP 7 == Get specific Worker's Ledger History
+export async function getWorkerLedgerHistory(req,res) {
+    try {
+        const workerId = req.params.id;
+        const firebaseUid = req.user.firebaseUid;
+
+        const history = await LedgerEntry.find({
+            firebaseUid: firebaseUid,
+            workerId: workerId,
+            entryType: "Advance"
+        }).sort({ date: -1 });
+        res.status(200).json(history);
+    } catch (error) {
+        console.error("Error fetching worker history:", error);
+        res.status(500).json({ message: "Server error fetching worker history" });
+    }
+}
+</file>
+
+<file path="src/controllers/reportsController.js">
+import Attendance from "../models/Attendance.js";
+import LedgerEntry from "../models/LedgerEntry.js";
+import Worker from "../models/Worker.js";
+
+export const getMonthlySummary = async (req,res) => {
+    try {
+        const { month } = req.query;
+        const firebaseUid = req.user.firebaseUid;
+
+        if (!month || !/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) {
+          return res.status(400).json({ message: "Valid month is required (YYYY-MM)" });
+      }
+
+        // 2. Time Object setup for Ledger (Date objects)
+        const [year, monthNum] = month.split('-');
+        const startDate = new Date(`${year}-${String(monthNum).padStart(2, '0')}-01T00:00:00.000+05:30`);
+        const endDate = new Date(startDate);
+        endDate.setMonth(endDate.getMonth() + 1);
+        const monthRegex = new RegExp(`^${month}`);
+
+        // 3. FETCH ATTENDANCE (Using $regex for strings)
+        const attendances = await Attendance.find({
+            firebaseUid,
+            date: { $regex: monthRegex }
+        }).lean();
+
+        // 4. Fetch the workers also
+        const workers = await Worker.find({ firebaseUid }).lean();
+
+        console.log(`[REPORTS] Found ${attendances.length} attendance sheets for ${month}`);
+
+        let totalVeg = 0, totalNonVeg = 0 ,totalPaise = 0, totalAbsent = 0;
+        const workerStats = {}; // Temporary object to group by workerId
+        
+        attendances.forEach(record => {
+            if (record.statuses) {
+                Object.entries(record.statuses).forEach(([key, status]) => {
+                    // Figure out who this is and if it's a night shift
+                    const isNight = key.includes('_night');
+                    const workerID = key.replace('_night', ''); // Removes "_night" to get the pure ID
+
+                    const cleanStatus = String(status).trim().toLowerCase();
+
+                    // Open a "folder" for this worker if they don't have one yet
+                    if (!workerStats[workerID]){
+                        workerStats[workerID] = { veg: 0, nonveg: 0, paise: 0, absent: 0, nights: 0 };
+                    }
+
+                    // Add to the GRAND TOTALS exactly like you were doing before
+                    if (cleanStatus === 'veg') totalVeg += 1;
+                    if (cleanStatus === 'non-veg' || cleanStatus === 'n-veg') totalNonVeg += 1; 
+                    if (cleanStatus === 'paise') totalPaise += 1;
+                    if (cleanStatus === 'absent') totalAbsent += 1;
+
+                    // ALSO add to the SPECIFIC WORKER'S totals!
+                    if(cleanStatus === 'veg') workerStats[workerID].veg += 1;
+                    if (cleanStatus === 'non-veg' || cleanStatus === 'n-veg') workerStats[workerID].nonveg += 1; 
+                    if (cleanStatus === 'paise') workerStats[workerID].paise += 1;
+                    if (cleanStatus === 'absent') workerStats[workerID].absent += 1;
+                    
+                    // Track night shifts (only if they actually worked that night)
+                    if(isNight && cleanStatus !== 'absent' && cleanStatus !== ''){
+                        workerStats[workerID].nights += 1;
+                    }
+                });
+            }
+        });
+
+
+        // 5. Match calculated stats with the actual worker names
+        const workerBreakdown = workers
+            .filter(w => w.isActive !== false || workerStats[w._id.toString()])
+            .map(w => {
+                const stats = workerStats[w._id.toString()] || { veg: 0, nonveg: 0, paise: 0, absent: 0, nights: 0 };
+                return {
+                    id: w._id,
+                    name: w.name,
+                    initial: w.name ? w.name.charAt(0).toUpperCase() : 'W',
+                    veg: stats.veg,
+                    nonveg: stats.nonveg,
+                    paise: stats.paise,
+                    absent: stats.absent,
+                    nights: stats.nights
+                };
+            });
+
+        // 6. FETCH LEDGER DATA (Using Date objects for time)
+        const ledgers = await LedgerEntry.find({
+            firebaseUid,
+            date: { $gte: startDate, $lt: endDate }
+        }).lean();
+
+        console.log(`[REPORTS] Found ${ledgers.length} ledger entries for ${month}`);
+
+        let totalAdvance = 0;
+        ledgers.forEach(entry => {
+            if(entry.entryType === 'Advance'){
+                totalAdvance += entry.amount || 0;
+            }
+        });
+
+        // 7. SEND THE FINAL MATH TO THE FRONTEND
+        res.status(200).json({
+            totalVeg,
+            totalNonVeg,
+            totalPaise,
+            totalAbsent,
+            totalAdvance,
+            workerBreakdown
+        });
+
+    } catch (error) {
+        console.error("Error generating report:", error);
+        res.status(500).json({ message: "Failed to generate monthly report." });
+    }
+}
+</file>
+
+<file path="src/controllers/userController.js">
+import User from "../models/User.js";
+
+export const syncUser = async (req, res) => {
+    try {
+        // req.user comes directly from the protect middleware we just wrote
+        const { firebaseUid, email, phone } = req.user;
+
+        // 1. Check if this contractor already exists in our MongoDB
+        let user = await User.findOne({ firebaseUid });
+
+        // 2. If they don't exist, this is their first time logging in. Create them!
+        if(!user){
+            user = await User.create({
+                firebaseUid,
+                email: email || "",
+                phoneNumber: phone || ""
+            });
+            console.log("New Contractoe Account Created in MongoDB!");
+        }else{
+            console.log("Contractor Account Synced!");
+        }
+        res.status(200).json(user);
+    } catch (error) {
+        console.error("Error syncing user:", error);
+        res.status(500).json({ message: "Server error syncing user" });
+    }
+};
+
+
+// GET user profile data
+export const getUserProfile = async (req, res) => {
+    try {
+        const { firebaseUid, email, phone } = req.user;
+        const user = await User.findOneAndUpdate(
+            { firebaseUid },
+            { $setOnInsert: { firebaseUid, email: email || "", phoneNumber: phone || "" } },
+            { new: true, upsert: true }
+        );
+        res.status(200).json(user);
+    } catch (error) {
+        console.error("Error fetching user profile:", error);
+        res.status(500).json({ message: "Server Error" });
+    }
+};
+
+// UPDATE user profile data (Name & Phone Number)
+export const updateUserProfile = async (req, res) => {
+    try {
+        const { name, phoneNumber } = req.body;
+        const updatedUser = await User.findOneAndUpdate(
+            { firebaseUid: req.user.firebaseUid },
+            { name, phoneNumber },
+            { new: true, upsert: true }
+        );
+        res.status(200).json(updatedUser);
+    } catch (error) {
+        console.error("Error updating profile:", error);
+        res.status(500).json({ message: "Server Error" });
+    }
+};
+</file>
+
+<file path="src/controllers/workerController.js">
+import Worker from "../models/Worker.js";
+
+
+// STEP.1 == Create a create a new worker function
+export async function createWorker(req,res){
+    try {
+        // 1. Grab the data sent from the mobile app (the body)
+        const { name , phoneNumber } = req.body;
+
+        // 2. Validation: Make sure they didn't leave the name blank
+       if(!name || !phoneNumber){
+          return res.status(400).json({ message: "Worker name and phone number are required" });
+      }
+
+        // 3. Create a new worker in the database
+        const newWorker = new Worker({
+            name,
+            phoneNumber,
+            firebaseUid: req.user.firebaseUid
+            // Note: currentAdvanceBalance defaults to 0 automatically!
+        });
+        
+        // 4. Save the new Worker using a new varaible called saveWorker
+        const savedWorker = await newWorker.save();
+
+        // 5. Send a success response back to the app (if the worker is created Succesfully)
+        res.status(201).json(savedWorker);
+
+    } catch (error) {
+        console.log("Error creating worker:", error);
+    res.status(500).json({ message: "Server Error" });
+    }
+};
+
+
+// STEP.2 == Get all Workers (Now supports optional ?includeInactive=true)
+export async function getAllWorkers(req, res) {
+    try {
+        const query = { firebaseUid: req.user.firebaseUid };
+
+        // If the frontend DID NOT explicitly ask for inactive workers, hide them by default.
+        if (req.query.includeInactive !== 'true') {
+            query.isActive = { $ne: false };
+        }
+
+        // Fetch the workers based on the query
+        const workers = await Worker.find(query);
+
+        res.status(200).json(workers);
+    } catch (error) {
+        console.log("Error fetching workers:", error);
+        res.status(500).json({ message: "Server Error" });
+    }
+}
+
+// STEP 3 == Get a single worker by ID
+export async function getWorkerById(req,res) {
+    try {
+       // 1. Grab the ID from the URL
+       const { id } = req.params;
+
+       // 2. Ask Mongoose to find the worker with that specific ID
+       const  getworker = await Worker.findOne({
+        _id: id,
+        firebaseUid: req.user.firebaseUid
+       });
+
+       // 3. Validation: What if the ID is wrong or the worker was deleted?
+       if(!getworker){
+        return res.status(404).json({ message: "Worker not found" });
+       }
+
+       // 4. Send the found worker back
+       res.status(200).json(getworker);
+
+    } catch (error) {
+       console.log("Error fetching single worker:", error);
+    res.status(500).json({ message: "Server Error" }); 
+    }
+}
+
+// STEP 4 == Update a worker (e.g., Dad needs to change their phone number)
+export async function updateWorker(req,res) {
+    try {
+    const { id } = req.params;
+    const { name, phoneNumber, isActive } = req.body;
+    // 1. findByIdAndUpdate takes 3 things: The ID, the new data (req.body), and options.
+  const updateworker = await Worker.findOneAndUpdate(
+      { _id: id, firebaseUid: req.user.firebaseUid },
+      { name, phoneNumber, isActive },
+      { new: true, runValidators: true }
+  );
+
+    // 2. Validation: What if the ID is wrong or the worker was deleted?
+    if(!updateworker){
+        return res.status(404).json({ message: "Worker not found" });
+    }
+
+    res.status(200).json(updateworker);
+
+    } catch (error) {
+      console.log("Error updating worker:", error);
+    res.status(500).json({ message: "Server Error" });  
+    }
+}
+
+
+// STEP 5 == Soft Delete a worker (Hide them, don't erase them)
+export async function deleteWorker(req,res) {
+    try {
+    const { id } = req.params;
+     
+    // 1. Ask Mongoose to find and destroy the record
+    const deleteworker = await Worker.findOneAndUpdate(
+        { _id: id, firebaseUid: req.user.firebaseUid },
+        { isActive: false }, // Flip the switch to hide them
+        { new: true }
+    );
+
+    // 2. Validation: What if the ID is wrong
+    if(!deleteworker){
+        return res.status(404).json({ message: "Worker not found" });
+    }
+
+    // 3. Since the worker is gone, we just send a success message back
+    res.status(200).json({ message: "Worker Deleted Successfully!"});
+
+    } catch (error) {
+       console.log("Error deleting worker:", error);
+    res.status(500).json({ message: "Server Error" }); 
+    }
+}
+</file>
+
+<file path="src/models/Attendance.js">
+import mongoose from "mongoose";
+
+const attendanceSchema = new mongoose.Schema({
+    firebaseUid: {
+        type: String,
+        required: true,
+        index: true
+    },
+    
+    date: {
+        type: String, 
+        required: true, 
+    },
+    statuses: {
+        type: Map,
+        of: String,
+        required: true
+    }
+}, { timestamps: true });
+
+
+// 🚨 COMPOUND INDEX: This ensures a contractor can't save two attendance sheets 
+// for the same date, but DIFFERENT contractors can have attendance on the same date!
+attendanceSchema.index({ firebaseUid: 1, date: 1}, { unique: true })
+const Attendance = mongoose.model("Attendance", attendanceSchema);
+export default Attendance;
+</file>
+
+<file path="src/models/LedgerEntry.js">
+import mongoose from "mongoose";
+
+const ledgerEntrySchema = new mongoose.Schema({
+    firebaseUid: {
+        type: String,
+        required: true,
+        index: true
+    },
+    date: {
+        type: Date,
+        default:Date.now
+    },
+    entryType: {
+        type:String,
+        required: true,
+        enum: ["Advance","Expense","BossDeposit"] // 💡 Restricted values
+    },
+    workerId: {
+        type:mongoose.Schema.Types.ObjectId,
+        ref: "Worker"
+    },
+    amount: {
+        type:Number,
+        default:0,
+        min: [0, "Amount cannot be negative"] // Blocks negative numbers at the database level!
+    },
+    paymentMethod: {
+        type: String,
+        enum: ["Cash","Online","Check","Other"],
+        default: "Cash"
+    },
+    category: {
+        type: String,
+        enum: ["Materials", "Transport", "Food", "Utilities", "Other"],
+        default: "Other"
+    },
+    description: {
+        type:String,
+    },
+    isEdited: { 
+        type: Boolean, 
+        default: false 
+    },
+    editReason: { 
+        type: String 
+    },
+    screenshotUrl: {
+        type:String
+    }
+
+});
+
+ledgerEntrySchema.index({ firebaseUid: 1, date: -1 });
+
+const LedgerEntry = mongoose.model("LedgerEntry", ledgerEntrySchema);
+export default LedgerEntry;
+</file>
+
+<file path="src/models/User.js">
+import mongoose from "mongoose";
+
+const userSchema = new mongoose.Schema({
+    firebaseUid:{
+        type: String,
+        required: true,
+        unique: true
+    },
+    phoneNumber:{
+        type: String
+    },
+    email:{
+        type: String
+    },
+    name: {
+        type: String,
+    }
+    
+} , { timestamps: true});
+
+const User = mongoose.model("User", userSchema);
+
+export default User;
+</file>
+
+<file path="src/models/Worker.js">
+import mongoose from "mongoose";
+
+const workerSchema = new mongoose.Schema({
+    firebaseUid:{
+        type: String,
+        required: true,
+        index: true // Makes database searches much faster
+    },
+    name: {
+        type:String,
+        required:true
+    },
+    phoneNumber: {
+        type:String,
+        required:true
+    },
+    currentAdvanceBalance: {
+        type:Number,
+        default: 0
+    },
+    isActive: {
+        type: Boolean,
+        default: true
+    }
+
+} , { timestamps: true });
+
+const Worker = mongoose.model("Worker", workerSchema)
+
+export default Worker;
+</file>
+
+<file path="src/routes/attendanceRoutes.js">
+import express from "express";
+import { getAttendanceByDate, saveAttendance } from "../controllers/attendanceController.js";
+import { protect } from "../../middleware/authMiddleware.js";
+
+
+const router = express.Router();
+
+router.use(protect);
+
+router.get("/:id", getAttendanceByDate);
+router.post("/", saveAttendance);
+
+export default router;
+</file>
+
+<file path="src/routes/ledgerRoutes.js">
+import express from "express";
+import {
+    createLedgerEntry,
+    getAllLedgerEntries,
+    getLedgerEntryById,
+    updateLedgerEntry,
+    deleteLedgerEntry,
+    getMonthlyLedgerSummary,
+    getWorkerLedgerHistory
+} from "../controllers/ledgerController.js";
+
+import { protect } from "../../middleware/authMiddleware.js";
+
+const router = express.Router();
+
+
+router.use(protect);
+
+router.get("/monthly-summary", getMonthlyLedgerSummary);
+router.get("/worker/:id", getWorkerLedgerHistory);
+
+router.post("/", createLedgerEntry);
+router.get("/", getAllLedgerEntries);
+router.get("/:id", getLedgerEntryById);
+router.put("/:id", updateLedgerEntry);
+router.delete("/:id", deleteLedgerEntry);
+
+
+
+export default router;
+</file>
+
+<file path="src/routes/reportRoutes.js">
+import express from "express";
+import { getMonthlySummary } from "../controllers/reportsController.js";
+import {protect} from '../../middleware/authMiddleware.js';
+
+const router = express.Router();
+
+router.get('/monthly-summary', protect, getMonthlySummary);
+
+export default router;
+</file>
+
+<file path="src/routes/userRoutes.js">
+import express from "express";
+import { getUserProfile, syncUser, updateUserProfile } from "../controllers/userController.js";
+import { protect } from "../../middleware/authMiddleware.js";
+
+
+const router = express.Router();
+
+router.post("/sync", protect , syncUser);
+router.put("/profile", protect, updateUserProfile);
+router.get("/profile", protect, getUserProfile);
+export default router;
+</file>
+
+<file path="src/routes/workerRoutes.js">
+import express from "express";
+import { 
+    createWorker,
+    getAllWorkers,
+    getWorkerById,
+    updateWorker,
+    deleteWorker
+ } from "../controllers/workerController.js";
+
+ import { protect } from "../../middleware/authMiddleware.js";
+
+
+const router = express.Router();
+
+router.use(protect);
+
+router.post("/", createWorker);
+router.get("/", getAllWorkers);
+router.get("/:id", getWorkerById);
+router.put("/:id", updateWorker);
+router.delete("/:id", deleteWorker);
+
+
+export default router;
+</file>
+
+<file path=".gitignore">
+node_modules
+.env
+firebaseServiceAccount.json
+</file>
+
+<file path="package.json">
+{
+  "name": "ExpenseEngine-backend",
+  "version": "1.0.0",
+  "description": "",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "firebase-admin": "^14.2.0",
+    "mongoose": "^9.9.1"
+  }
+}
+</file>
+
+<file path="server.js">
+// 1. Import all your installed packages
+import express from "express";
+import cors from "cors";
+import "dotenv/config";
+import path from "path";
+import mongoose from "mongoose";
+import workerRoutes from "./src/routes/workerRoutes.js";
+import ledgerRoutes from "./src/routes/ledgerRoutes.js";
+import attendanceRoutes from "./src/routes/attendanceRoutes.js";
+import userRoutes from "./src/routes/userRoutes.js";
+import reportRoutes from './src/routes/reportRoutes.js';
+
+// 2. Initialize the Express application
+const app = express();
+
+// 3. Set up Middleware (This allows your app to receive JSON data and talk to your future frontend)
+app.use(cors({ origin: process.env.FRONTEND_URL || "*" }));
+app.use(express.json());
+
+app.use("/api/workers", workerRoutes);
+app.use("/api/ledger", ledgerRoutes);
+app.use("/api/attendance", attendanceRoutes);
+app.use("/api/users", userRoutes);
+app.use("/api/reports", reportRoutes);
+
+// 4. Connect to MongoDB using your secret URI
+mongoose.connect(process.env.MONGODB_URI)
+.then(() => {
+    console.log("🔥 MongoDB Connected Successfully to ExpenseEngine!");
+})
+// Lesson no 1 :- In JavaScript, a semicolon acts like a period at the end of a sentence. It tells the computer, "I am completely done with this thought."
+.catch((error) => {
+    console.error("❌ MongoDB Connection Error:", error);
+    process.exit(1);
+});
+
+// 5. Define the Port and start listening
+const PORT = process.env.PORT || 5000;
+
+app.listen(PORT, () => {
+    console.log(`🚀 Server is running on port ${PORT}`);
+});
+</file>
+
+</files>
