@@ -14,6 +14,10 @@ const workerSchema = new mongoose.Schema({
         type:String,
         required:true
     },
+    upiId: {
+        type: String,
+        default: ""
+    },
     currentAdvanceBalance: {
         type:Number,
         default: 0
