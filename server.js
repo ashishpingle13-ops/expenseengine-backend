@@ -14,7 +14,7 @@ import reportRoutes from './src/routes/reportRoutes.js';
 const app = express();
 
 // 3. Set up Middleware (This allows your app to receive JSON data and talk to your future frontend)
-app.use(cors({ origin: "*", credentials: true }));
+app.use(cors({ origin: "*" }));
 app.use(express.json());
 
 app.use("/api/workers", workerRoutes);

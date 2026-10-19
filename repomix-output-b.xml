@@ -40,6 +40,8 @@ The content is organized as follows:
 </file_summary>
 
 <directory_structure>
+api/
+  index.js
 middleware/
   authMiddleware.js
 src/
@@ -63,10 +65,54 @@ src/
 .gitignore
 package.json
 server.js
+vercel.json
 </directory_structure>
 
 <files>
 This section contains the contents of the repository's files.
+
+<file path="api/index.js">
+import express from "express";
+import cors from "cors";
+import "dotenv/config";
+import mongoose from "mongoose";
+import workerRoutes from "../src/routes/workerRoutes.js";
+import ledgerRoutes from "../src/routes/ledgerRoutes.js";
+import attendanceRoutes from "../src/routes/attendanceRoutes.js";
+import userRoutes from "../src/routes/userRoutes.js";
+import reportRoutes from '../src/routes/reportRoutes.js';
+
+const app = express();
+
+app.use(cors({ origin: "*" }));
+app.use(express.json());
+
+// Database connection cache for serverless environments
+let cachedDb = null;
+async function connectDB() {
+    if (cachedDb && mongoose.connection.readyState === 1) return;
+    cachedDb = await mongoose.connect(process.env.MONGODB_URI);
+}
+
+// Middleware to ensure DB is connected on every request
+app.use(async (req, res, next) => {
+    try {
+        await connectDB();
+        next();
+    } catch (error) {
+        console.error("Database connection error:", error);
+        res.status(500).json({ message: "Database connection failed" });
+    }
+});
+
+app.use("/api/workers", workerRoutes);
+app.use("/api/ledger", ledgerRoutes);
+app.use("/api/attendance", attendanceRoutes);
+app.use("/api/users", userRoutes);
+app.use("/api/reports", reportRoutes);
+
+export default app;
+</file>
 
 <file path="middleware/authMiddleware.js">
 import { initializeApp, getApps, cert } from 'firebase-admin/app';
@@ -997,30 +1043,6 @@ node_modules
 firebaseServiceAccount.json
 </file>
 
-<file path="package.json">
-{
-  "name": "ExpenseEngine-backend",
-  "version": "1.0.0",
-  "description": "",
-  "main": "server.js",
-  "scripts": {
-    "start": "node server.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "module",
-  "dependencies": {
-    "cors": "^2.8.6",
-    "dotenv": "^17.4.2",
-    "express": "^5.2.1",
-    "firebase-admin": "^14.2.0",
-    "mongoose": "^9.9.1"
-  }
-}
-</file>
-
 <file path="server.js">
 // 1. Import all your installed packages
 import express from "express";
@@ -1038,7 +1060,7 @@ import reportRoutes from './src/routes/reportRoutes.js';
 const app = express();
 
 // 3. Set up Middleware (This allows your app to receive JSON data and talk to your future frontend)
-app.use(cors({ origin: process.env.FRONTEND_URL || "*" }));
+app.use(cors({ origin: "*" }));
 app.use(express.json());
 
 app.use("/api/workers", workerRoutes);
@@ -1064,6 +1086,49 @@ const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
     console.log(`🚀 Server is running on port ${PORT}`);
 });
+</file>
+
+<file path="vercel.json">
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "api/index.js",
+      "use": "@vercel/node"
+    }
+  ],
+  "routes": [
+    { "src": "/(.*)", "dest": "api/index.js" }
+  ]
+}
+</file>
+
+<file path="package.json">
+{
+  "name": "ExpenseEngine-backend",
+  "version": "1.0.0",
+  "description": "",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "engines": { "node": "22.x" },
+  "dependencies": {
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "firebase-admin": "^14.2.0",
+    "mongoose": "^9.9.1"
+  },
+  "overrides": {
+    "jose": "^5.9.6"
+  }
+}
 </file>
 
 </files>
