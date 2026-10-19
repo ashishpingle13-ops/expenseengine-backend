@@ -1043,6 +1043,34 @@ node_modules
 firebaseServiceAccount.json
 </file>
 
+<file path="package.json">
+{
+  "name": "ExpenseEngine-backend",
+  "version": "1.0.0",
+  "description": "",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "engines": { "node": "22.x" },
+  "dependencies": {
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "firebase-admin": "^14.2.0",
+    "mongoose": "^9.9.1"
+  },
+  "overrides": {
+    "jose": "^5.9.6"
+  }
+}
+</file>
+
 <file path="server.js">
 // 1. Import all your installed packages
 import express from "express";
@@ -1100,34 +1128,6 @@ app.listen(PORT, () => {
   "routes": [
     { "src": "/(.*)", "dest": "api/index.js" }
   ]
-}
-</file>
-
-<file path="package.json">
-{
-  "name": "ExpenseEngine-backend",
-  "version": "1.0.0",
-  "description": "",
-  "main": "server.js",
-  "scripts": {
-    "start": "node server.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "module",
-  "engines": { "node": "22.x" },
-  "dependencies": {
-    "cors": "^2.8.6",
-    "dotenv": "^17.4.2",
-    "express": "^5.2.1",
-    "firebase-admin": "^14.2.0",
-    "mongoose": "^9.9.1"
-  },
-  "overrides": {
-    "jose": "^5.9.6"
-  }
 }
 </file>
 
