@@ -661,7 +661,7 @@ import Worker from "../models/Worker.js";
 export async function createWorker(req,res){
     try {
         // 1. Grab the data sent from the mobile app (the body)
-        const { name , phoneNumber } = req.body;
+        const { name , phoneNumber, upiId } = req.body;
 
         // 2. Validation: Make sure they didn't leave the name blank
        if(!name || !phoneNumber){
@@ -672,6 +672,7 @@ export async function createWorker(req,res){
         const newWorker = new Worker({
             name,
             phoneNumber,
+            upiId: upiId || "",
             firebaseUid: req.user.firebaseUid
             // Note: currentAdvanceBalance defaults to 0 automatically!
         });
@@ -739,11 +740,11 @@ export async function getWorkerById(req,res) {
 export async function updateWorker(req,res) {
     try {
     const { id } = req.params;
-    const { name, phoneNumber, isActive } = req.body;
+    const { name, phoneNumber, upiId, isActive } = req.body;
     // 1. findByIdAndUpdate takes 3 things: The ID, the new data (req.body), and options.
   const updateworker = await Worker.findOneAndUpdate(
       { _id: id, firebaseUid: req.user.firebaseUid },
-      { name, phoneNumber, isActive },
+      { name, phoneNumber,upiId, isActive },
       { new: true, runValidators: true }
   );
 
@@ -902,43 +903,6 @@ const User = mongoose.model("User", userSchema);
 export default User;
 </file>
 
-<file path="src/models/Worker.js">
-import mongoose from "mongoose";
-
-const workerSchema = new mongoose.Schema({
-    firebaseUid:{
-        type: String,
-        required: true,
-        index: true // Makes database searches much faster
-    },
-    name: {
-        type:String,
-        required:true
-    },
-    phoneNumber: {
-        type:String,
-        required:true
-    },
-    upiId: {
-        type: String,
-        default: ""
-    },
-    currentAdvanceBalance: {
-        type:Number,
-        default: 0
-    },
-    isActive: {
-        type: Boolean,
-        default: true
-    }
-
-} , { timestamps: true });
-
-const Worker = mongoose.model("Worker", workerSchema)
-
-export default Worker;
-</file>
-
 <file path="src/routes/attendanceRoutes.js">
 import express from "express";
 import { getAttendanceByDate, saveAttendance } from "../controllers/attendanceController.js";
@@ -1045,6 +1009,43 @@ export default router;
 node_modules
 .env
 firebaseServiceAccount.json
+</file>
+
+<file path="src/models/Worker.js">
+import mongoose from "mongoose";
+
+const workerSchema = new mongoose.Schema({
+    firebaseUid:{
+        type: String,
+        required: true,
+        index: true // Makes database searches much faster
+    },
+    name: {
+        type:String,
+        required:true
+    },
+    phoneNumber: {
+        type:String,
+        required:true
+    },
+    upiId: {
+        type: String,
+        default: ""
+    },
+    currentAdvanceBalance: {
+        type:Number,
+        default: 0
+    },
+    isActive: {
+        type: Boolean,
+        default: true
+    }
+
+} , { timestamps: true });
+
+const Worker = mongoose.model("Worker", workerSchema)
+
+export default Worker;
 </file>
 
 <file path="package.json">

@@ -5,7 +5,7 @@ import Worker from "../models/Worker.js";
 export async function createWorker(req,res){
     try {
         // 1. Grab the data sent from the mobile app (the body)
-        const { name , phoneNumber } = req.body;
+        const { name , phoneNumber, upiId } = req.body;
 
         // 2. Validation: Make sure they didn't leave the name blank
        if(!name || !phoneNumber){
@@ -16,6 +16,7 @@ export async function createWorker(req,res){
         const newWorker = new Worker({
             name,
             phoneNumber,
+            upiId: upiId || "",
             firebaseUid: req.user.firebaseUid
             // Note: currentAdvanceBalance defaults to 0 automatically!
         });
@@ -83,11 +84,11 @@ export async function getWorkerById(req,res) {
 export async function updateWorker(req,res) {
     try {
     const { id } = req.params;
-    const { name, phoneNumber, isActive } = req.body;
+    const { name, phoneNumber, upiId, isActive } = req.body;
     // 1. findByIdAndUpdate takes 3 things: The ID, the new data (req.body), and options.
   const updateworker = await Worker.findOneAndUpdate(
       { _id: id, firebaseUid: req.user.firebaseUid },
-      { name, phoneNumber, isActive },
+      { name, phoneNumber,upiId, isActive },
       { new: true, runValidators: true }
   );
 
