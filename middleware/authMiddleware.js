@@ -27,10 +27,20 @@ export const protect = async (req, res, next) => {
             // Verify the token using the new Modular Auth API
             const decodedToken = await getAuth().verifyIdToken(token);
 
-            // Attach the user's details to the request so the controllers can use it
+            // Extract email safely from token or provider metadata
+            let userEmail = decodedToken.email || "";
+            if (!userEmail && decodedToken.firebase && decodedToken.firebase.identities) {
+                const googleEmails = decodedToken.firebase.identities['google.com'];
+                if (googleEmails && googleEmails.length > 0) {
+                    userEmail = googleEmails[0];
+                }
+            }
+
+            // Attach the user's details to the request
             req.user = {
                 firebaseUid: decodedToken.uid,
-                email: decodedToken.email || "",
+                name: decodedToken.name || decodedToken.firebase?.sign_in_second_factor || "",
+                email: userEmail,
                 phone: decodedToken.phone_number || ""
             };
 

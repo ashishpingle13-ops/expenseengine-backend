@@ -2,22 +2,21 @@ import User from "../models/User.js";
 
 export const syncUser = async (req, res) => {
     try {
-        // req.user comes directly from the protect middleware we just wrote
-        const { firebaseUid, email, phone } = req.user;
+        const { firebaseUid, name, email, phone } = req.user;
 
-        // 1. Check if this contractor already exists in our MongoDB
         let user = await User.findOne({ firebaseUid });
 
-        // 2. If they don't exist, this is their first time logging in. Create them!
-        if(!user){
+        if (!user) {
             user = await User.create({
                 firebaseUid,
+                name: name || "",
                 email: email || "",
                 phoneNumber: phone || ""
             });
-            console.log("New Contractoe Account Created in MongoDB!");
-        }else{
-            console.log("Contractor Account Synced!");
+            console.log("New Manager Account Created in MongoDB!");
+        } else if (!user.name && name) {
+            user.name = name;
+            await user.save();
         }
         res.status(200).json(user);
     } catch (error) {
@@ -26,14 +25,23 @@ export const syncUser = async (req, res) => {
     }
 };
 
-
-// GET user profile data
 export const getUserProfile = async (req, res) => {
     try {
-        const { firebaseUid, email, phone } = req.user;
+        const { firebaseUid, name, email, phone } = req.user;
+        
+        // 1. Build the update payload using only $set to avoid operator conflict
+        const updateFields = {};
+        if (email) updateFields.email = email;
+        if (phone) updateFields.phoneNumber = phone;
+        if (name) updateFields.name = name;
+
+        // 2. Perform findOneAndUpdate with upsert
         const user = await User.findOneAndUpdate(
             { firebaseUid },
-            { $setOnInsert: { firebaseUid, email: email || "", phoneNumber: phone || "" } },
+            { 
+                $set: updateFields,
+                $setOnInsert: { firebaseUid } 
+            },
             { new: true, upsert: true }
         );
         res.status(200).json(user);
