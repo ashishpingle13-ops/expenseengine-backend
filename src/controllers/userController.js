@@ -28,22 +28,24 @@ export const syncUser = async (req, res) => {
 export const getUserProfile = async (req, res) => {
     try {
         const { firebaseUid, name, email, phone } = req.user;
-        
-        // 1. Build the update payload using only $set to avoid operator conflict
-        const updateFields = {};
-        if (email) updateFields.email = email;
-        if (phone) updateFields.phoneNumber = phone;
-        if (name) updateFields.name = name;
 
-        // 2. Perform findOneAndUpdate with upsert
-        const user = await User.findOneAndUpdate(
-            { firebaseUid },
-            { 
-                $set: updateFields,
-                $setOnInsert: { firebaseUid } 
-            },
-            { new: true, upsert: true }
-        );
+        let user = await User.findOne({ firebaseUid });
+
+        if (!user) {
+            user = await User.create({
+                firebaseUid,
+                name: name || "",
+                email: email || "",
+                phoneNumber: phone || ""
+            });
+        } else {
+            let needsSave = false;
+            if (!user.email && email) { user.email = email; needsSave = true; }
+            if (!user.phoneNumber && phone) { user.phoneNumber = phone; needsSave = true; }
+            if (!user.name && name) { user.name = name; needsSave = true; }
+            if (needsSave) await user.save();
+        }
+
         res.status(200).json(user);
     } catch (error) {
         console.error("Error fetching user profile:", error);
