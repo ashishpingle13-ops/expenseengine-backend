@@ -9,6 +9,7 @@ import ledgerRoutes from "./src/routes/ledgerRoutes.js";
 import attendanceRoutes from "./src/routes/attendanceRoutes.js";
 import userRoutes from "./src/routes/userRoutes.js";
 import reportRoutes from './src/routes/reportRoutes.js';
+import aiRoutes from './src/routes/aiRoutes.js';
 
 // 2. Initialize the Express application
 const app = express();
@@ -22,6 +23,7 @@ app.use("/api/ledger", ledgerRoutes);
 app.use("/api/attendance", attendanceRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/reports", reportRoutes);
+app.use("/api/ai", aiRoutes);
 
 // 4. Connect to MongoDB using your secret URI
 mongoose.connect(process.env.MONGODB_URI)
